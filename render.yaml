@@ -1,0 +1,19 @@
+# Render Blueprint: free web service with a public https://<name>.onrender.com address.
+# On first deploy Render asks for GIQ_PASSCODE: your owner passcode (8+ characters).
+services:
+  - type: web
+    name: gridiron-iq
+    runtime: python
+    plan: free
+    buildCommand: "echo no build needed"
+    startCommand: "python server.py"
+    healthCheckPath: /
+    envVars:
+      - key: GIQ_CLOUD
+        value: "1"
+      - key: PYTHON_VERSION
+        value: "3.12.10"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: GIQ_PASSCODE
+        sync: false

@@ -1,0 +1,6 @@
+.giq-setup.json
+.giq-setup.json.tmp
+server.log
+server.log.old
+__pycache__/
+phone-qr-*.png
