@@ -1655,7 +1655,7 @@ document.addEventListener('click', e => {
       case 'installNow': installPrompt?.prompt(); installPrompt = null; return closeModal();
       case 'copyLink': navigator.clipboard?.writeText(v).then(() => { a.textContent = 'Copied ✓'; }).catch(() => {}); return;
       case 'retry': return S.cfg ? loadAll() : init();
-      case 'switch': closeModal(); S.setup = { step: 'start' }; return renderSetup();
+      case 'switch': closeModal(); S.setup = { step: 'start' }; return serverInfo().then(renderSetup);
       case 'manual': return finishSetup({ mode: 'manual', roster: S.cfg?.mode === 'manual' ? S.cfg.roster : [] });
       case 'browse': S.tab = 'rankings'; return finishSetup({ mode: 'manual', roster: S.cfg?.mode === 'manual' ? S.cfg.roster : [] });
       case 'setupBack': S.setup = { step: 'start', username: S.setup.username }; return renderSetup();
