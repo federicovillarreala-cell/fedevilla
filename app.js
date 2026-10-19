@@ -6,6 +6,7 @@ import {
 import { buildGameModel, analyzeParlay, betTier, fmtAm, fairAm, normCdf } from './games.js';
 import { buildProps, propLabel } from './props.js';
 import { fetchEspnLeague, adaptEspn, parseLeagueId } from './espn.js';
+import { fetchGameClock, freshSleeperMatchups, freshStatPoints, liveSide, liveWinProb, anyGameOn, weekStarted, kickoffDue } from './live.js';
 
 // ---------- helpers ----------
 const $ = (s, el = document) => el.querySelector(s);
@@ -31,6 +32,7 @@ const S = {
   rank: { pos: 'ALL', mode: 'week', q: '', avail: 'all' },
   wvPos: 'ALL', tvPos: 'ALL',
   compare: [], trade: { give: [], get: [], partner: null },
+  live: null,
   gm: null, gmError: null, props: null, propsError: null, propMkt: 'ALL', parlay: store.get('giq_parlay', []),
 };
 const saveParlay = () => store.set('giq_parlay', S.parlay);
@@ -174,7 +176,9 @@ async function loadAll() {
     computeTradeValues(S.model, S.league?.total_rosters || 12, S.slots);
     S.gm = null; S.gmError = null; S.props = null; S.propsError = null; gmPromise = null;
     S.loadedAt = new Date();
+    S.live = null;
     render();
+    refreshLive();
   } catch (e) {
     renderError('Something went wrong loading data.', e);
   }
@@ -405,7 +409,7 @@ function viewTeam() {
   const stats = `
   <div class="grid g4">
     <div class="card stat"><div class="label">Projected · Wk ${S.model.week}</div><div class="value">${f1(curTotal)}</div><div class="hint">Best possible lineup: ${f1(opt.total)}</div></div>
-    <div class="card stat"><div class="label">Win probability</div><div class="value ${mu ? (mu.wp >= 0.5 ? 'good' : 'bad') : ''}">${mu ? pct(mu.wp) : '—'}</div><div class="hint">${mu ? `vs ${esc(teamName(mu.oppR.roster_id))} (${f1(mu.oppProj)})` : isLeague() ? 'No matchup this week' : 'Connect your ESPN or Sleeper league for matchups'}</div></div>
+    ${wpCard(mu)}
     <div class="card stat"><div class="label">Lineup upgrade</div><div class="value ${gain > 0.05 ? 'warn' : 'good'}">${gain > 0.05 ? '+' + f1(gain) : 'Optimal ✓'}</div><div class="hint">${gain > 0.05 ? '<a href="#" data-tab="startsit">See recommended swaps →</a>' : 'Your starters are the best plays'}</div></div>
     <div class="card stat"><div class="label">${rec ? 'Record' : 'ROS strength'}</div><div class="value">${rec ? `${rec.wins}-${rec.losses}${rec.ties ? '-' + rec.ties : ''}` : f1(me?.ros)}</div><div class="hint">${rec ? `Power rank ${ordinal(me.power)} of ${strength.length} · ${f1(rec.fpts + (rec.fpts_decimal || 0) / 100)} PF` : 'Projected pts/week, next 5 weeks'}</div></div>
   </div>`;
@@ -599,39 +603,131 @@ function myMatchup() {
   const wp = winProb(myProj, oppProj, lineupSd(myL.map(l => l.player)), lineupSd(oppL.map(l => l.player)));
   const optMine = optimizeLineup(activePlayers(myR), S.slots);
   const wpOpt = winProb(optMine.total, oppProj, lineupSd(optMine.lineup.map(l => l.player)), lineupSd(oppL.map(l => l.player)));
-  return { me, opp, myR, oppR, myL, oppL, myProj, oppProj, wp, wpOpt, optTotal: optMine.total };
+  let live = null;
+  if (S.live && weekStarted(S.live.clock)) {
+    const a = liveSide(myL, me, S.live.clock, S.live.statPts), b = liveSide(oppL, opp, S.live.clock, S.live.statPts);
+    live = { me: a, opp: b, wp: liveWinProb(a, b), on: anyGameOn(S.live.clock) };
+  }
+  return { me, opp, myR, oppR, myL, oppL, myProj, oppProj, wp, wpOpt, optTotal: optMine.total, live };
 }
+
+// ---------- live game day ----------
+let liveBusy = false, liveTimer = null;
+const wpKey = () => `giq_wph_${S.model.season}_${S.model.week}_${S.cfg.leagueId}`;
+async function refreshLive() {
+  if (!isLeague() || !S.model || liveBusy) return;
+  liveBusy = true;
+  try {
+    const { season, week } = S.model;
+    const clock = await fetchGameClock(season, week);
+    let statPts = S.live?.statPts || null;
+    if (weekStarted(clock)) {
+      if (S.cfg.mode === 'espn') {
+        const [raw, db] = await Promise.all([fetchEspnLeague({ leagueId: S.cfg.leagueId, season, s2: S.cfg.s2, swid: S.cfg.swid }), sleeper.allPlayers()]);
+        const a = adaptEspn(raw, db, S.cfg.swid);
+        Object.assign(S, { matchups: a.matchups, rosters: a.rosters });
+        buildOwners();
+      } else {
+        S.matchups = await freshSleeperMatchups(S.cfg.leagueId, week);
+      }
+      const mine = S.matchups.find(m => m.roster_id === S.cfg.rosterId);
+      if (!mine || !Object.keys(mine.players_points || {}).length) statPts = await freshStatPoints(season, week, S.model.score).catch(() => statPts);
+    }
+    S.live = { clock, statPts, at: new Date() };
+    const m = myMatchup();
+    if (m?.live) {
+      const h = store.get(wpKey(), []);
+      if (!h.length || Math.abs(h.at(-1)[1] - m.live.wp) >= 0.005) { h.push([Date.now(), Math.round(m.live.wp * 1000) / 1000]); store.set(wpKey(), h.slice(-300)); }
+    }
+    paintLive(m);
+  } catch (e) {
+    console.warn('live update failed', e);
+  } finally {
+    liveBusy = false;
+    scheduleLive();
+  }
+}
+// every minute while games are on; every 10 minutes otherwise so we notice kickoff
+function scheduleLive() {
+  clearTimeout(liveTimer);
+  const c = S.live?.clock;
+  if (!c || !isLeague()) return;
+  const busy = anyGameOn(c) || kickoffDue(c);
+  liveTimer = setTimeout(() => (document.hidden ? scheduleLive() : refreshLive()), busy ? 60_000 : 600_000);
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && S.live && Date.now() - S.live.at > 60_000) refreshLive();
+});
+function paintLive(m) {
+  if ($('#modal') && !$('#modal').hidden) return;
+  if (S.tab === 'matchup') return render();
+  const el = $('#wpCard');
+  if (S.tab === 'team' && el && m) el.outerHTML = wpCard(m);
+}
+function wpCard(mu) {
+  if (!mu) return `<div class="card stat" id="wpCard"><div class="label">Win probability</div><div class="value">—</div><div class="hint">${isLeague() ? 'No matchup this week' : 'Connect your ESPN or Sleeper league for matchups'}</div></div>`;
+  const L = mu.live;
+  const wp = L ? L.wp : mu.wp;
+  return `<div class="card stat" id="wpCard" data-tab="matchup" style="cursor:pointer"><div class="label">${L?.on ? '<span class="live-dot"></span>Live win probability' : L ? 'Win probability · live' : 'Win probability'}</div>
+    <div class="value ${wp >= 0.5 ? 'good' : 'bad'}">${pct(wp)}</div>
+    <div class="hint">${L ? `<b>${f1(L.me.points)}</b> – ${f1(L.opp.points)} vs ${esc(teamName(mu.oppR.roster_id))}` : `vs ${esc(teamName(mu.oppR.roster_id))} (${f1(mu.oppProj)})`}</div></div>`;
+}
+const gameTag = g => !g ? '<span class="gtag">BYE</span>'
+  : g.state === 'in' ? `<span class="gtag on">${esc(g.detail)}</span>`
+  : g.state === 'post' ? '<span class="gtag done">Final</span>'
+  : `<span class="gtag">${g.date.toLocaleDateString([], { weekday: 'short' })} ${g.date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>`;
+function wpSpark() {
+  const h = store.get(wpKey(), []);
+  if (h.length < 2) return '';
+  const t0 = h[0][0], t1 = h.at(-1)[0] || t0 + 1, W = 300, H = 60;
+  const pts = h.map(([t, p]) => `${((t - t0) / (t1 - t0 || 1) * W).toFixed(1)},${((1 - p) * H).toFixed(1)}`).join(' ');
+  return `<div class="spark"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="Win probability over time"><line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" class="mid"/><polyline points="${pts}"/></svg><div class="muted" style="font-size:11px;display:flex;justify-content:space-between"><span>Win % since kickoff</span><span>50% line</span></div></div>`;
+}
+
 function viewMatchup() {
   const m = myMatchup();
   if (!m) return `<div class="card empty">No head-to-head matchup found for week ${S.model.week}.</div>`;
-  const live = m.me.points > 0 || m.opp.points > 0;
-  const side = (L, mm) => L.map(l => {
-    const p = l.player;
-    const pts = p ? mm.players_points?.[p.id] : null;
-    return `<tr><td>${slotTag(l.slot)}</td><td>${plCell(p)}</td><td>${p ? muBadge(p) : ''}</td><td class="num big">${p ? f1(p.pred) : '0.0'}</td>${live ? `<td class="num">${pts != null ? f1(pts) : '—'}</td>` : ''}</tr>`;
+  const L = m.live;
+  const wp = L ? L.wp : m.wp;
+  const sideRows = (lineup, liveSide) => (liveSide ? liveSide.rows : lineup).map(r => {
+    const p = r.player;
+    if (!liveSide) return `<tr><td>${slotTag(r.slot)}</td><td>${plCell(p)}</td><td>${p ? muBadge(p) : ''}</td><td class="num big">${p ? f1(p.pred) : '0.0'}</td></tr>`;
+    const playing = r.game?.state === 'in';
+    return `<tr class="${playing ? 'row-live' : ''}"><td>${slotTag(r.slot)}</td><td>${plCell(p)}</td><td>${p ? gameTag(r.game) : ''}</td>
+      <td class="num big ${playing ? 'accent' : ''}">${f1(r.pts)}</td><td class="num muted">${p ? f1(r.pts + r.rem) : '—'}</td></tr>`;
   }).join('');
+  const head = L ? '<th></th><th>Player</th><th>Game</th><th class="num">Pts</th><th class="num" title="Points now + what they should still score">Proj</th>' : '<th></th><th>Player</th><th>Mu</th><th class="num">Proj</th>';
+  const status = s => `<div class="muted" style="font-size:12px">${s.playing ? `<span class="live-dot"></span>${s.playing} playing · ` : ''}${s.toPlay} yet to play</div>`;
+  const team = (rid, proj, s) => `<div class="team"><div class="muted" style="font-weight:600">${esc(teamName(rid))}</div>
+      ${s ? `<div class="score">${f1(s.points)}</div><div class="accent" style="font-size:13px">Proj ${f1(s.final)}</div>${status(s)}` : `<div class="score">${f1(proj)}</div><div class="muted" style="font-size:12px">projected</div>`}</div>`;
   const pos = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF'].map(k => {
     const a = sum(m.myL.filter(l => l.player?.pos === k).map(l => l.player.pred));
     const b = sum(m.oppL.filter(l => l.player?.pos === k).map(l => l.player.pred));
     return `<tr><td><span class="pos ${k}">${k}</span></td><td class="num ${a > b ? 'good' : ''}">${f1(a)}</td><td class="num ${b > a ? 'bad' : ''}">${f1(b)}</td><td class="num ${a - b >= 0 ? 'good' : 'bad'}">${a - b >= 0 ? '+' : ''}${f1(a - b)}</td></tr>`;
   }).join('');
+  const updated = S.live ? `Updated ${S.live.at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}${L?.on ? ' · refreshes every minute' : ''}` : 'Checking live scores…';
   return `
-  <h1 class="section-title">Week ${S.model.week} Matchup</h1>
-  <p class="section-sub">Win probability simulates both lineups' projected scoring ranges.</p>
+  <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <div><h1 class="section-title">Week ${S.model.week} Matchup ${L?.on ? '<span class="live-pill"><span class="live-dot"></span>LIVE</span>' : ''}</h1>
+    <p class="section-sub">${L ? 'Live win probability = points already scored + what each starter should still score in the time left.' : "Win probability simulates both lineups' projected scoring ranges."}</p></div>
+    <button class="btn sm" data-act="liveNow">↻ ${esc(updated)}</button>
+  </div>
   <div class="card">
-    <div class="vs">
-      <div class="team"><div class="muted" style="font-weight:600">${esc(teamName(m.myR.roster_id))}</div><div class="score">${f1(m.myProj)}</div>${live ? `<div class="accent">Live: ${f1(m.me.points)}</div>` : '<div class="muted" style="font-size:12px">projected</div>'}</div>
-      <div><div class="ring" style="--p:${Math.round(m.wp * 100)}"><div><div><b>${pct(m.wp)}</b><span>to win</span></div></div></div></div>
-      <div class="team"><div class="muted" style="font-weight:600">${esc(teamName(m.oppR.roster_id))}</div><div class="score">${f1(m.oppProj)}</div>${live ? `<div class="accent">Live: ${f1(m.opp.points)}</div>` : '<div class="muted" style="font-size:12px">projected</div>'}</div>
+    <div class="vs ${L ? 'vs-live' : ''}">
+      ${team(m.myR.roster_id, m.myProj, L?.me)}
+      <div><div class="ring" style="--p:${Math.round(wp * 100)}"><div><div><b>${pct(wp)}</b><span>${L?.on ? 'live to win' : 'to win'}</span></div></div></div>
+        ${L ? `<div class="muted" style="font-size:11.5px;text-align:center;margin-top:6px">Before kickoff: ${pct(m.wp)}</div>` : ''}</div>
+      ${team(m.oppR.roster_id, m.oppProj, L?.opp)}
     </div>
-    ${m.optTotal - m.myProj > 0.05 ? `<div class="alert info mt"><div class="ico">↑</div><div><div>Set your optimal lineup to raise your odds to <b class="good">${pct(m.wpOpt)}</b></div><div class="t"><a href="#" data-tab="startsit">See the swaps</a></div></div></div>` : ''}
+    ${L ? wpSpark() : ''}
+    ${!L && m.optTotal - m.myProj > 0.05 ? `<div class="alert info mt"><div class="ico">↑</div><div><div>Set your optimal lineup to raise your odds to <b class="good">${pct(m.wpOpt)}</b></div><div class="t"><a href="#" data-tab="startsit">See the swaps</a></div></div></div>` : ''}
   </div>
   <div class="grid g-main mt">
     <div class="grid g2" style="gap:16px">
-      <div class="card"><h3>You</h3><div class="sub">Current lineup</div><div class="table-wrap"><table><thead><tr><th></th><th>Player</th><th>Mu</th><th class="num">Proj</th>${live ? '<th class="num">Live</th>' : ''}</tr></thead><tbody>${side(m.myL, m.me)}</tbody></table></div></div>
-      <div class="card"><h3>Opponent</h3><div class="sub">Current lineup</div><div class="table-wrap"><table><thead><tr><th></th><th>Player</th><th>Mu</th><th class="num">Proj</th>${live ? '<th class="num">Live</th>' : ''}</tr></thead><tbody>${side(m.oppL, m.opp)}</tbody></table></div></div>
+      <div class="card"><h3>You</h3><div class="sub">${L ? 'Live lineup' : 'Current lineup'}</div><div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${sideRows(m.myL, L?.me)}</tbody></table></div></div>
+      <div class="card"><h3>Opponent</h3><div class="sub">${L ? 'Live lineup' : 'Current lineup'}</div><div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${sideRows(m.oppL, L?.opp)}</tbody></table></div></div>
     </div>
-    <div class="card"><h3>Edge by position</h3><div class="sub">Projected points</div><table><thead><tr><th>Pos</th><th class="num">You</th><th class="num">Opp</th><th class="num">Edge</th></tr></thead><tbody>${pos}</tbody></table></div>
+    <div class="card"><h3>Edge by position</h3><div class="sub">Pre-game projected points</div><table><thead><tr><th>Pos</th><th class="num">You</th><th class="num">Opp</th><th class="num">Edge</th></tr></thead><tbody>${pos}</tbody></table></div>
   </div>`;
 }
 
@@ -1553,6 +1649,7 @@ document.addEventListener('click', e => {
       case 'more': return openMore();
       case 'slip': return openSlip();
       case 'makePair': return makePair();
+      case 'liveNow': return refreshLive();
       case 'pairStart': S.setup = { step: 'pair' }; return renderSetup();
       case 'loginStart': S.setup = { step: 'login' }; return renderSetup();
       case 'installNow': installPrompt?.prompt(); installPrompt = null; return closeModal();

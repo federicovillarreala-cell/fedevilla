@@ -97,7 +97,15 @@ export function adaptEspn(d, db, swid) {
   const period = d.status?.currentMatchupPeriod || d.scoringPeriodId;
   const matchups = [];
   (d.schedule || []).filter(m => m.matchupPeriodId === period).forEach((m, i) => {
-    for (const side of [m.home, m.away]) if (side) matchups.push({ roster_id: side.teamId, matchup_id: i + 1, points: side.totalPointsLive ?? side.totalPoints ?? 0, players_points: {} });
+    for (const side of [m.home, m.away]) {
+      if (!side) continue;
+      const players_points = {}; // this week's live points per player, scored by ESPN
+      for (const e of side.rosterForCurrentScoringPeriod?.entries || []) {
+        const id = toId(e), v = e.playerPoolEntry?.appliedStatTotal;
+        if (id && typeof v === 'number') players_points[id] = v;
+      }
+      matchups.push({ roster_id: side.teamId, matchup_id: i + 1, points: side.totalPointsLive ?? side.totalPoints ?? 0, players_points });
+    }
   });
 
   const acq = d.settings?.acquisitionSettings || {};

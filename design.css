@@ -333,3 +333,23 @@ main { padding-bottom: max(60px, env(safe-area-inset-bottom)); }
   .nm-short { display: inline; }
   .pl-name { max-width: 30vw; }
 }
+
+/* live game day */
+.live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ef4444; margin-right: 6px; vertical-align: middle; animation: livePulse 1.4s ease-in-out infinite; }
+@keyframes livePulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 #ef444466; } 50% { opacity: .55; box-shadow: 0 0 0 5px #ef444400; } }
+.live-pill { display: inline-flex; align-items: center; font-size: 12px; font-weight: 800; letter-spacing: .08em; color: #fca5a5; background: #ef44441f; border: 1px solid #ef444455; border-radius: 999px; padding: 3px 10px 3px 8px; vertical-align: middle; margin-left: 8px; }
+.gtag { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.gtag.on { color: #fca5a5; font-weight: 700; }
+.gtag.done { color: var(--muted); opacity: .75; }
+tr.row-live td { background: #ef44440d; }
+.spark { margin-top: 14px; }
+.spark svg { width: 100%; height: 60px; display: block; }
+.spark polyline { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.spark .mid { stroke: var(--line); stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
+@media (max-width: 720px) {
+  .vs.vs-live { grid-template-columns: 1fr 104px 1fr; gap: 6px; }
+  .vs.vs-live .team .score { font-size: 28px; }
+  .vs.vs-live .ring { width: 96px; height: 96px; }
+  .vs.vs-live .ring > div { width: 78px; height: 78px; }
+  .vs.vs-live .ring b { font-size: 21px; }
+}
