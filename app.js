@@ -185,7 +185,7 @@ async function loadAll() {
 }
 
 // ---------- chrome ----------
-const TABS = [['team', 'My Team'], ['coach', '🧠 Coach'], ['startsit', 'Start / Sit'], ['matchup', 'Matchup'], ['picks', '🔒 Picks & Parlays'], ['rankings', 'Rankings'], ['waivers', 'Waivers'], ['trade', 'Trade Analyzer'], ['league', 'League']];
+const TABS = [['team', 'My Team'], ['moves', '✅ Weekly Moves'], ['coach', '🧠 Coach'], ['startsit', 'Start / Sit'], ['matchup', 'Matchup'], ['picks', '🔒 Picks & Parlays'], ['rankings', 'Rankings'], ['waivers', 'Waivers'], ['trade', 'Trade Analyzer'], ['league', 'League']];
 function renderChrome() {
   const m = S.model;
   $('#brandSub').textContent = m
@@ -206,10 +206,11 @@ const ICON = {
   coach: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h6M9 18h3"/>',
   picks: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2"/>',
   rankings: '<path d="M4 20V11M10 20V5M16 20v-6M21 20H3"/>',
+  moves: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="m3 6 1.5 1.5L7 5M3 12l1.5 1.5L7 11M3 18l1.5 1.5L7 17"/>',
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
 };
 const svg = k => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${ICON[k]}</svg>`;
-const BOTTOM = [['team', 'Team'], ['coach', 'Coach'], ['picks', 'Picks'], ['rankings', 'Ranks']];
+const BOTTOM = [['team', 'Team'], ['moves', 'Moves'], ['coach', 'Coach'], ['picks', 'Picks']];
 function renderBottomBar() {
   const bar = $('#bottombar');
   if (!S.model) { bar.innerHTML = ''; return; }
@@ -242,7 +243,7 @@ function openSlip() {
 function render() {
   renderChrome();
   renderBottomBar();
-  const view = { team: viewTeam, startsit: viewStartSit, matchup: viewMatchup, picks: viewPicks, coach: viewCoach, rankings: viewRankings, waivers: viewWaivers, trade: viewTrade, league: viewLeague }[S.tab] || viewTeam;
+  const view = { team: viewTeam, moves: viewMoves, startsit: viewStartSit, matchup: viewMatchup, picks: viewPicks, coach: viewCoach, rankings: viewRankings, waivers: viewWaivers, trade: viewTrade, league: viewLeague }[S.tab] || viewTeam;
   $('#view').innerHTML = view() + `<div class="foot">Data: Sleeper public API · projections blended with recent form, matchup & injury status · updated ${S.loadedAt?.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) || ''}</div>`;
   if (S.tab === 'rankings') renderRankTable();
   if (S.openGameId && !$('#modal').hidden) openGame(S.openGameId);
@@ -406,7 +407,7 @@ function viewTeam() {
   const me = strength.find(t => t.rid === myId());
   const rec = isLeague() ? r.settings : null;
 
-  const stats = `
+  const stats = `${movesBanner()}
   <div class="grid g4">
     <div class="card stat"><div class="label">Projected · Wk ${S.model.week}</div><div class="value">${f1(curTotal)}</div><div class="hint">Best possible lineup: ${f1(opt.total)}</div></div>
     ${wpCard(mu)}
@@ -1290,6 +1291,7 @@ function tradeIdeas() {
   const myGive = mine.filter(p => p.value > 0).sort((a, b) => b.value - a.value).slice(0, 14);
   const benchIds = new Set(optimizeLineup(mine, S.slots, 'ros').bench.map(p => p.id));
   const bench = myGive.filter(p => benchIds.has(p.id)).slice(0, 7);
+  const weakPos = weakestPos();
   const out = [];
   const others = isLeague() ? S.rosters.filter(r => r.roster_id !== myId()) : [null];
   for (const r of others) {
@@ -1302,10 +1304,14 @@ function tradeIdeas() {
       const me = optimizeLineup(mine.filter(p => !giveIds.has(p.id)).concat(get), S.slots, 'ros').total - base;
       const them = r ? optimizeLineup(theirs.filter(p => !getIds.has(p.id)).concat(give), S.slots, 'ros').total - tBase : null;
       const vGive = sum(give.map(x => x.value)), vGet = sum(get.map(x => x.value));
-      if (me < 0.4) return;
-      if (r && them < -0.3) return;          // they'd get worse — won't accept
-      if (vGive < vGet * 0.85) return;      // looks lopsided in our favor — won't accept
-      out.push({ partner: r?.roster_id ?? null, give, get, me, them, vGive, vGet, score: me + (them ?? 0) * 0.5 });
+      if (me < 0.15) return;
+      if (r && them < -1.2) return;         // they'd lose too much — not worth sending
+      if (vGive < vGet * 0.7) return;       // far too lopsided in our favor
+      // win-win: clearly helps us, doesn't hurt them, fair on paper; otherwise still worth an offer
+      const winWin = me >= 0.4 && (!r || them >= -0.3) && vGive >= vGet * 0.85;
+      const accept = !r ? null : them > 0.3 && vGive >= vGet * 0.95 ? 'Likely' : winWin ? 'Maybe' : 'Long shot';
+      const need = get.some(x => x.pos === weakPos) ? 0.6 : 0;
+      out.push({ partner: r?.roster_id ?? null, give, get, me, them, vGive, vGet, winWin, accept, score: me + (them ?? 0) * 0.5 + (winWin ? 2 : 0) + need });
     };
     for (const g of myGive) for (const t of targets) evalTrade([g], [t]);
     for (let i = 0; i < bench.length; i++) for (let k = i + 1; k < bench.length; k++) for (const t of targets) evalTrade([bench[i], bench[k]], [t]);
@@ -1318,7 +1324,7 @@ function tradeIdeas() {
     if ((perTeam[pk] || 0) >= 2 || usedGet.has(t.get[0].id)) continue;
     perTeam[pk] = (perTeam[pk] || 0) + 1; usedGet.add(t.get[0].id);
     list.push(t);
-    if (list.length >= 8) break;
+    if (list.length >= 10) break;
   }
   tiCache = { key, model: S.model, list };
   return list;
@@ -1328,17 +1334,93 @@ function tradeIdeasCard() {
   S.tradeIdeas = ideas;
   const names = xs => xs.map(p => `<span class="ti-pl"><span class="pos ${p.pos}">${p.pos}</span> ${esc(p.name)}</span>`).join('<span class="muted"> + </span>');
   return `<div class="card mt">
-    <div class="card-head"><div><h3>💡 Trade ideas</h3><div class="sub">${isLeague() ? 'Win-win offers: they improve your lineup and the other team gains too, so they might actually accept.' : 'Upgrade targets to shop for in your league, paid for with your depth.'}</div></div></div>
+    <div class="card-head"><div><h3>💡 Trade ideas</h3><div class="sub">${isLeague() ? 'Offers that improve your lineup, ranked by how likely the other team is to say yes.' : 'Upgrade targets to shop for in your league, paid for with your depth.'}</div></div></div>
     ${ideas.length ? ideas.map((t, i) => `
       <div class="ti">
         <div class="ti-side"><div class="ti-label">You give</div>${names(t.give)}</div>
         <div class="ti-arrow">⇄</div>
         <div class="ti-side"><div class="ti-label">You get${t.partner != null ? ` · ${esc(teamName(t.partner))}` : ''}</div>${names(t.get)}</div>
-        <div class="ti-stats"><b class="gain">+${f1(t.me)}</b><span>pts/wk for you</span>${t.them != null ? `<em class="${t.them >= 0 ? 'good' : 'warn'}">${t.them >= 0 ? '+' : ''}${f1(t.them)} for them</em>` : ''}</div>
+        <div class="ti-stats"><b class="gain">+${f1(t.me)}</b><span>pts/wk for you</span>${t.them != null ? `<em class="${t.them >= 0 ? 'good' : 'warn'}">${t.them >= 0 ? '+' : ''}${f1(t.them)} for them</em>` : ''}${t.accept ? acceptTag(t.accept) : ''}</div>
         <button class="btn sm primary" data-act="loadTrade" data-i="${i}">Load into analyzer</button>
       </div>`).join('') : '<div class="empty">No trades found that help both sides right now — your roster is well balanced.</div>'}
   </div>`;
 }
+
+// your thinnest starting spot: the trade finder leans toward filling it
+function weakestPos() {
+  const ps = activePlayers(myRoster());
+  if (!ps.length) return null;
+  if (isLeague() && S.rosters.length > 1) {
+    const me = teamStrength().find(t => t.rid === myId());
+    return ['QB', 'RB', 'WR', 'TE'].sort((a, b) => me.posRank[b] - me.posRank[a])[0];
+  }
+  const need = { QB: 1, RB: 2, WR: 2, TE: 1 };
+  const starters = optimizeLineup(ps, S.slots, 'ros').lineup.map(l => l.player).filter(Boolean);
+  const score = k => { const xs = starters.filter(p => p.pos === k); return xs.length ? mean(xs.map(p => p.rosRank || 99)) / need[k] : 999; };
+  return Object.keys(need).sort((a, b) => score(b) - score(a))[0];
+}
+const acceptTag = a => `<span class="acc ${a === 'Likely' ? 'good' : a === 'Maybe' ? 'warn' : 'dim'}">${a === 'Long shot' ? 'Long shot — worth asking' : `${a} to accept`}</span>`;
+
+// =====================================================================
+// WEEKLY MOVES (a fresh to-do list every week)
+// =====================================================================
+const movesKey = () => `giq_moves_${S.model.season}_${S.model.week}_${S.cfg.leagueId || 'manual'}`;
+function lineupMoves() {
+  if (!isLeague()) return [];
+  const r = myRoster();
+  const opt = optimizeLineup(activePlayers(r), S.slots, 'pred');
+  const cur = currentLineup(r);
+  const curIds = new Set(cur.map(l => l.player?.id).filter(Boolean)), optIds = new Set(opt.lineup.map(l => l.player?.id).filter(Boolean));
+  const ins = opt.lineup.map(l => l.player).filter(p => p && !curIds.has(p.id)).sort((a, b) => b.pred - a.pred);
+  const outs = cur.map(l => l.player).filter(p => p && !optIds.has(p.id)).sort((a, b) => a.pred - b.pred);
+  return ins.map((p, i) => ({ key: `ls:${p.id}`, in: p, out: outs[i] || null, gain: p.pred - (outs[i]?.pred || 0) })).filter(m => m.gain > 0.05);
+}
+function weeklyMoves() {
+  const lineup = lineupMoves();
+  const adds = waiverSuggestions().filter(s => s.gain > 0.15).sort((a, b) => b.gain - a.gain).slice(0, 3).map(s => ({ ...s, key: `wv:${s.p.id}` }));
+  const trades = tradeIdeas().slice(0, 4).map(t => ({ ...t, key: `tr:${t.give.map(p => p.id).join('+')}>${t.get.map(p => p.id).join('+')}` }));
+  const done = new Set(store.get(movesKey(), []));
+  const all = [...lineup, ...adds, ...trades];
+  return { lineup, adds, trades, done, total: all.length, left: all.filter(m => !done.has(m.key)).length };
+}
+function movesBanner() {
+  if (!S.model || !activePlayers(myRoster()).length) return '';
+  const m = weeklyMoves();
+  if (!m.total) return '';
+  return `<a href="#" class="card moves-banner" data-tab="moves"><div class="mb-num">${m.left}</div><div style="flex:1"><b>${m.left ? `${m.left} move${m.left === 1 ? '' : 's'} to make this week` : 'All of this week\'s moves are done ✓'}</b>
+    <div class="muted" style="font-size:12.5px">${[m.lineup.length && `${m.lineup.length} lineup fix${m.lineup.length === 1 ? '' : 'es'}`, m.adds.length && `${m.adds.length} pickup${m.adds.length === 1 ? '' : 's'}`, m.trades.length && `${m.trades.length} trade offer${m.trades.length === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}</div></div><span class="muted" style="font-size:20px">›</span></a>`;
+}
+function viewMoves() {
+  if (!activePlayers(myRoster()).length) return `<div class="card empty">Add your players on <a href="#" data-tab="team">My Team</a> to get weekly moves.</div>`;
+  const m = weeklyMoves();
+  S.tradeIdeas = tradeIdeas();
+  const showFaab = isLeague() && S.league.settings?.waiver_type === 2;
+  const row = (key, body, side) => `<label class="mv ${m.done.has(key) ? 'done' : ''}"><input type="checkbox" data-act="moveDone" data-k="${esc(key)}" ${m.done.has(key) ? 'checked' : ''}><div class="mv-body">${body}</div>${side ? `<div class="mv-side">${side}</div>` : ''}</label>`;
+  const nm = p => `<b>${esc(p.name)}</b> <span class="pos ${p.pos}">${p.pos}</span>`;
+  const section = (icon, title, sub, rows, empty) => `<div class="card mt"><h3>${icon} ${title}</h3><div class="sub">${sub}</div>${rows || `<div class="empty" style="padding:14px">${empty}</div>`}</div>`;
+
+  const lineupRows = m.lineup.map(x => row(x.key, `Start ${nm(x.in)}${x.out ? ` over ${nm(x.out)}` : ' in your empty spot'}<div class="muted mv-why">${esc(oppPlain(x.in))}${x.out && OUT.includes(x.out.inj) ? ` · ${esc(x.out.name)} is ${esc(x.out.inj)}` : ''}</div>`, `<b class="gain">+${f1(x.gain)}</b><span>pts</span>`)).join('');
+  const addRows = m.adds.map(s => row(s.key, `Add ${nm(s.p)}${s.drop ? `, drop ${nm(s.drop)}` : ''}<div class="muted mv-why">${f1(s.p.ros)} pts/game the rest of the season${showFaab ? ` · bid <b class="accent">$${faabBid(s)}</b>` : ''}</div>`, `<b class="gain">+${f1(s.gain)}</b><span>pts/wk</span>`)).join('');
+  const names = xs => xs.map(nm).join(' + ');
+  const tradeRows = m.trades.map((t, i) => row(t.key, `Offer ${names(t.give)} for ${names(t.get)}${t.partner != null ? ` <span class="muted">· ${esc(teamName(t.partner))}</span>` : ''}
+      <div class="mv-why">${t.accept ? acceptTag(t.accept) : '<span class="muted">Shop this in your league</span>'} <button class="btn xs ghost" data-act="loadTrade" data-i="${i}">Check in analyzer</button></div>`,
+    `<b class="gain">+${f1(t.me)}</b><span>pts/wk</span>`)).join('');
+  const weak = weakestPos();
+  const shop = activePlayers(myRoster()).filter(p => p.value > 0 && !optimizeLineup(activePlayers(myRoster()), S.slots, 'ros').lineup.some(l => l.player?.id === p.id)).sort((a, b) => b.value - a.value)[0];
+  const tradeEmpty = shop && weak ? `Nothing clears the bar this week. Shop <b>${esc(shop.name)}</b> (bench, value ${f1(shop.value)}) for a ${weak} — that's your thinnest spot.` : 'No trades found this week.';
+
+  const doneN = m.total - m.left;
+  return `
+  <h1 class="section-title">Week ${S.model.week} Moves</h1>
+  <p class="section-sub">A fresh to-do list every week: fix your lineup, grab the best free agents and send trade offers. Tick things off as you do them.</p>
+  <div class="card moves-progress"><div><b>${m.total ? (m.left ? `${m.left} of ${m.total} left` : 'All done for this week ✓') : 'Nothing to do — your team is set ✓'}</b><div class="muted" style="font-size:12.5px">${weak ? `Your thinnest starting spot: <span class="pos ${weak}">${weak}</span> — trade offers lean toward fixing it.` : ''}</div></div>
+    ${m.total ? `<div class="bar" style="width:140px"><i style="width:${Math.round(doneN / m.total * 100)}%;background:var(--good)"></i></div>` : ''}</div>
+  ${section('🔁', 'Set your lineup', isLeague() ? `Swaps vs. your current ${platformName()} lineup for week ${S.model.week}` : 'Connect your ESPN or Sleeper league to check your real lineup', lineupRows, isLeague() ? 'Your lineup is already optimal ✓' : 'Your best lineup is on <a href="#" data-tab="startsit">Start / Sit</a>.')}
+  ${section('➕', 'Waiver pickups', `${isLeague() ? 'Free agents in your league' : 'Likely free agents'} who make your lineup better the rest of the season`, addRows, 'No free agent beats your roster right now ✓')}
+  ${section('⇄', 'Trades to offer', isLeague() ? 'Ranked by how much they help you and how likely the other team is to say yes' : 'Targets to shop for in your league, paid for with your depth', tradeRows, tradeEmpty)}
+  <div class="muted" style="font-size:12px;margin-top:12px">New moves appear automatically each week as projections, injuries and free agents change. More trade ideas on <a href="#" data-tab="trade">Trade Analyzer</a>.</div>`;
+}
+const oppPlain = p => { const wk = p?.weeks[S.model.week]; return wk?.bye ? 'on bye' : `${f1(p.pred)} projected${wk?.opp ? ` vs ${wk.opp}` : ''}`; };
 
 // =====================================================================
 // PICKS & PARLAYS
@@ -1650,6 +1732,12 @@ document.addEventListener('click', e => {
       case 'slip': return openSlip();
       case 'makePair': return makePair();
       case 'liveNow': return refreshLive();
+      case 'moveDone': {
+        const done = new Set(store.get(movesKey(), []));
+        done.has(a.dataset.k) ? done.delete(a.dataset.k) : done.add(a.dataset.k);
+        store.set(movesKey(), [...done]);
+        return render();
+      }
       case 'pairStart': S.setup = { step: 'pair' }; return renderSetup();
       case 'loginStart': S.setup = { step: 'login' }; return renderSetup();
       case 'installNow': installPrompt?.prompt(); installPrompt = null; return closeModal();

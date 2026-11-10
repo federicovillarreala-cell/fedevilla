@@ -1,5 +1,5 @@
 // sw.js — keeps the app shell available offline; live data (APIs) always goes to the network
-const CACHE = 'giq-v3';
+const CACHE = 'giq-v4';
 const SHELL = ['./', 'index.html', 'styles.css', 'design.css', 'app.js', 'engine.js', 'games.js', 'props.js', 'espn.js', 'live.js', 'manifest.webmanifest', 'icons/icon-192.png'];
 
 self.addEventListener('install', e => {

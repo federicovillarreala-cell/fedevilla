@@ -353,3 +353,20 @@ tr.row-live td { background: #ef44440d; }
   .vs.vs-live .ring > div { width: 78px; height: 78px; }
   .vs.vs-live .ring b { font-size: 21px; }
 }
+
+/* weekly moves */
+.moves-banner { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; text-decoration: none; color: var(--text); border-color: #22d3a655; background: linear-gradient(90deg, #22d3a614, transparent 70%), var(--panel); }
+.moves-banner .mb-num { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; font-family: var(--display); font-size: 24px; font-weight: 800; color: #0a0f1e; background: var(--accent); flex: none; }
+.moves-progress { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.mv { display: flex; align-items: flex-start; gap: 12px; padding: 12px; border-radius: 12px; background: var(--panel2); border: 1px solid var(--line); margin-top: 8px; cursor: pointer; }
+.mv input { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--accent); flex: none; cursor: pointer; }
+.mv-body { flex: 1; min-width: 0; line-height: 1.5; }
+.mv-why { font-size: 12px; margin-top: 3px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mv-side { text-align: right; display: flex; flex-direction: column; flex: none; }
+.mv-side span { color: var(--muted); font-size: 11px; }
+.mv.done { opacity: .5; }
+.mv.done .mv-body > b, .mv.done .mv-body { text-decoration: line-through; text-decoration-color: var(--muted); }
+.acc { font-size: 11.5px; font-weight: 700; }
+.acc.good { color: var(--good); } .acc.warn { color: var(--warn); } .acc.dim { color: var(--muted); }
+.ti-stats .acc { margin-top: 2px; }
+.btn.xs { padding: 3px 9px; font-size: 11.5px; border-radius: 8px; }
